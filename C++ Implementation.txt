@@ -1,0 +1,315 @@
+#include <iostream>
+#include <stack>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <cmath>
+#include <sstream>
+#include <iomanip>
+
+using namespace std;
+
+// This class acts as our "Math Engine." It is kept separate from the User Interface (UI)
+// so that the math logic can be reused in different types of programs.
+class ExpressionEngine {
+private:
+    // Determines the "Power" of an operator. Higher numbers mean the math should happen first.
+    // This is the core of PEMDAS (Parentheses, Exponents, Multiplication/Division, Addition/Subtraction).
+    int getOperatorPrecedence(char operation) {
+        if (operation == '^') return 3; // Exponents are highest priority
+        if (operation == '*' || operation == '/' || operation == '%') return 2;
+        if (operation == '+' || operation == '-') return 1;
+        return 0; // Not an operator
+    }
+
+    // Exponents are unique because they are "Right-Associative" (calculated right to left).
+    // This helps the Shunting-Yard algorithm decide when to move things to the result.
+    bool isRightAssociative(char operation) {
+        return operation == '^';
+    }
+
+    // Simple check to see if a string is one of our supported math symbols.
+    bool checkIsOperator(const string& text) {
+        if (text.empty()) return false;
+        // If it's 1 character long and found in our list of symbols, it's an operator.
+        return text.size() == 1 && string("+-*/%^").find(text[0]) != string::npos;
+    }
+
+    // Uses C standard library logic to check if a string is a valid number (like "5", "-3.5", or "100").
+    bool checkIsNumber(const string& text) {
+        if (text.empty() || text == "-") return false; // A single minus sign is an operator, not a number.
+        char* endPointer;
+        strtod(text.c_str(), &endPointer); // Try to convert string to a double.
+        return *endPointer == '\0'; // If we reached the end of the string, it's a valid number.
+    }
+
+public:
+    // Turns a single string "5 + ( 3 * 2 )" into a list of pieces ["5", "+", "(", "3", "*", "2", ")"].
+    vector<string> tokenizeInput(string userInput) {
+        // Standardize different bracket styles so the math logic only has to look for '('.
+        for(char &character : userInput) {
+            if(character == '[' || character == '{') character = '(';
+            if(character == ']' || character == '}') character = ')';
+        }
+        vector<string> tokenList;
+        stringstream stringStream(userInput); // This handles splitting the text by spaces automatically.
+        string tempToken;
+        while(stringStream >> tempToken) {
+            tokenList.push_back(tempToken);
+        }
+        return tokenList;
+    }
+
+    // A safety check to make sure the user didn't leave a bracket open (e.g., "( 5 + 3").
+    bool areBracketsBalanced(const vector<string>& tokenList) {
+        int balanceCounter = 0;
+        for (const string& token : tokenList) {
+            if (token == "(") balanceCounter++;
+            else if (token == ")") balanceCounter--;
+            if (balanceCounter < 0) return false; // Found a ')' before a '('
+        }
+        return balanceCounter == 0; // If zero, every '(' has a matching ')'
+    }
+
+    // This is our "Garbage Filter." It ensures the final expression makes mathematical sense.
+    // For Postfix, you need exactly one more number than you have operators.
+    bool isPostfixSyntacticallyValid(const vector<string>& postfixTokens) {
+        if (postfixTokens.empty()) return false;
+        int operandCount = 0;
+        for (const string& token : postfixTokens) {
+            if (this->checkIsNumber(token)) {
+                operandCount++;
+            } else if (this->checkIsOperator(token)) {
+                if (operandCount < 2) return false; // Not enough numbers for this operator to work with!
+                operandCount--; // Two numbers become one result.
+            } else {
+                return false; // Found something weird like "abc" or "--"
+            }
+        }
+        return operandCount == 1; // A perfect expression leaves exactly one final answer.
+    }
+
+    /* --- Conversion Methods --- */
+
+    // The Shunting-Yard Algorithm: Turns Infix (3 + 5) into Postfix (3 5 +).
+    vector<string> convertInfixToPostfix(const vector<string>& infixTokens) {
+        if (!areBracketsBalanced(infixTokens)) return {"ERROR_MISMATCHED_PARENTHESES"};
+        
+        vector<string> outputQueue; // The final result
+        stack<string> operatorStack; // Temporary "waiting room" for operators
+
+        for (const string& token : infixTokens) {
+            if (checkIsNumber(token)) {
+                outputQueue.push_back(token); // Numbers go straight to the result.
+            } else if (token == "(") {
+                operatorStack.push(token);
+            } else if (token == ")") {
+                // When we hit a ')', move everything from the stack to the result until we hit the '('.
+                while (!operatorStack.empty() && operatorStack.top() != "(") {
+                    outputQueue.push_back(operatorStack.top());
+                    operatorStack.pop();
+                }
+                if (operatorStack.empty()) return {"ERROR_MISMATCHED_PARENTHESES"};
+                operatorStack.pop(); // Throw away the '('
+            } else if (checkIsOperator(token)) {
+                // Check precedence: If the operator on the stack is stronger, move it to the result first.
+                while (!operatorStack.empty() && operatorStack.top() != "(") {
+                    int currentPrec = getOperatorPrecedence(token[0]);
+                    int topStackPrec = getOperatorPrecedence(operatorStack.top()[0]);
+                    if ((!isRightAssociative(token[0]) && currentPrec <= topStackPrec) || 
+                        (isRightAssociative(token[0]) && currentPrec < topStackPrec)) {
+                        outputQueue.push_back(operatorStack.top());
+                        operatorStack.pop();
+                    } else break;
+                }
+                operatorStack.push(token);
+            } else {
+                return {"ERROR_INVALID_TOKEN"}; // Catches "!!" or "5--2"
+            }
+        }
+        // Move whatever is left on the stack to the result.
+        while (!operatorStack.empty()) {
+            if (operatorStack.top() == "(") return {"ERROR_MISMATCHED_PARENTHESES"};
+            outputQueue.push_back(operatorStack.top());
+            operatorStack.pop();
+        }
+
+        // Final verification to catch errors like "5 + +"
+        if (!isPostfixSyntacticallyValid(outputQueue)) return {"ERROR_INVALID_SYNTAX"};
+        return outputQueue;
+    }
+
+    // Prefix is just Infix reversed, converted to Postfix, and then reversed back!
+    vector<string> convertInfixToPrefix(vector<string> infixTokens) {
+        reverse(infixTokens.begin(), infixTokens.end());
+        for (string& token : infixTokens) {
+            if (token == "(") token = ")";
+            else if (token == ")") token = "(";
+        }
+        vector<string> result = convertInfixToPostfix(infixTokens);
+        if (!result.empty() && result[0].find("ERROR") != string::npos) return result;
+        reverse(result.begin(), result.end());
+        return result;
+    }
+
+    // Turns Postfix (3 5 +) back into readable Infix ( ( 3 + 5 ) ).
+    string convertPostfixToInfix(const vector<string>& postfixTokens) {
+        if (!isPostfixSyntacticallyValid(postfixTokens)) return "Error: Invalid Syntax";
+        stack<string> expressionStack;
+        for (const string& token : postfixTokens) {
+            if (checkIsNumber(token)) {
+                expressionStack.push(token);
+            } else {
+                string operandB = expressionStack.top(); expressionStack.pop();
+                string operandA = expressionStack.top(); expressionStack.pop();
+                expressionStack.push("( " + operandA + " " + token + " " + operandB + " )");
+            }
+        }
+        return expressionStack.top();
+    }
+
+    // Turns Postfix (3 5 +) into Prefix (+ 3 5).
+    vector<string> convertPostfixToPrefix(const vector<string>& postfixTokens) {
+        if (!isPostfixSyntacticallyValid(postfixTokens)) return {"ERROR_INVALID_SYNTAX"};
+        stack<vector<string>> prefixStack;
+        for (const string& token : postfixTokens) {
+            if (checkIsNumber(token)) {
+                prefixStack.push({token});
+            } else {
+                vector<string> operandB = prefixStack.top(); prefixStack.pop();
+                vector<string> operandA = prefixStack.top(); prefixStack.pop();
+                vector<string> combined = {token};
+                combined.insert(combined.end(), operandA.begin(), operandA.end());
+                combined.insert(combined.end(), operandB.begin(), operandB.end());
+                prefixStack.push(combined);
+            }
+        }
+        return prefixStack.top();
+    }
+
+    // Prefix is processed right-to-left to build Postfix.
+    vector<string> convertPrefixToPostfix(const vector<string>& prefixTokens) {
+        stack<vector<string>> postfixStack;
+        for (int i = (int)prefixTokens.size() - 1; i >= 0; i--) {
+            if (checkIsNumber(prefixTokens[i])) {
+                postfixStack.push({prefixTokens[i]});
+            } else if (checkIsOperator(prefixTokens[i])) {
+                if (postfixStack.size() < 2) return {"ERROR_INVALID_SYNTAX"};
+                vector<string> operandA = postfixStack.top(); postfixStack.pop();
+                vector<string> operandB = postfixStack.top(); postfixStack.pop();
+                vector<string> combined = operandA;
+                combined.insert(combined.end(), operandB.begin(), operandB.end());
+                combined.push_back(prefixTokens[i]);
+                postfixStack.push(combined);
+            } else {
+                return {"ERROR_INVALID_TOKEN"};
+            }
+        }
+        if (postfixStack.size() != 1) return {"ERROR_INVALID_SYNTAX"};
+        return postfixStack.top();
+    }
+
+    // Bridge function: Prefix -> Postfix -> Infix.
+    string convertPrefixToInfix(const vector<string>& prefixTokens) {
+        vector<string> intermediatePostfix = convertPrefixToPostfix(prefixTokens);
+        if (!intermediatePostfix.empty() && intermediatePostfix[0].find("ERROR") != string::npos) {
+            return "Error: Invalid Syntax";
+        }
+        return convertPostfixToInfix(intermediatePostfix);
+    }
+
+    // The Calculator: Processes Postfix and returns a clean string result.
+    string evaluatePostfixExpression(const vector<string>& postfixTokens) {
+        if (!isPostfixSyntacticallyValid(postfixTokens)) return "Error: Invalid Syntax";
+
+        stack<double> valueStack;
+        for (const string& token : postfixTokens) {
+            if (checkIsNumber(token)) {
+                valueStack.push(stod(token)); // stod = String to Double
+            } else {
+                double valueB = valueStack.top(); valueStack.pop();
+                double valueA = valueStack.top(); valueStack.pop();
+                
+                // Actual Math happens here:
+                if (token == "+") valueStack.push(valueA + valueB);
+                else if (token == "-") valueStack.push(valueA - valueB);
+                else if (token == "*") valueStack.push(valueA * valueB);
+                else if (token == "/") {
+                    if (valueB == 0) return "Undefined"; // Division by zero safety
+                    valueStack.push(valueA / valueB);
+                }
+                else if (token == "^") valueStack.push(pow(valueA, valueB));
+                else if (token == "%") valueStack.push(fmod(valueA, valueB));
+            }
+        }
+        // ostringstream ensures we don't get 0.200000; it formats 0.2 as "0.2".
+        ostringstream finalFormattedValue;
+        finalFormattedValue << valueStack.top();
+        return finalFormattedValue.str();
+    }
+};
+
+// --- USER INTERFACE HELPER ---
+// Neatly prints our list of strings to the console, or shows a descriptive error message.
+void displayTokenVector(const vector<string>& tokens) {
+    if (tokens.empty()) return;
+    if (tokens[0] == "ERROR_MISMATCHED_PARENTHESES") cout << "Error: Mismatched Parentheses";
+    else if (tokens[0] == "ERROR_INVALID_SYNTAX") cout << "Error: Invalid Syntax (Check spacing/operators)";
+    else if (tokens[0] == "ERROR_INVALID_TOKEN") cout << "Error: Invalid Character Detected";
+    else {
+        for (const string& t : tokens) cout << t << " ";
+    }
+    cout << endl;
+}
+
+// --- MAIN PROGRAM LOOP ---
+int main() {
+    ExpressionEngine calculator; 
+    while (true) {
+        cout << "\n--- RPN Program ---\n1. Conversion\n2. Evaluation\n3. Exit\nSelection: ";
+        string userChoice; getline(cin, userChoice);
+        if (userChoice == "3") break;
+
+        if (userChoice == "1") {
+            cout << "\n1. Infix to Postfix & Prefix\n2. Prefix to Infix & Postfix\n3. Postfix to Infix & Prefix\nSelection: ";
+            string subChoice; getline(cin, subChoice);
+            cout << "Enter Expression (use spaces between everything): ";
+            string rawInput; getline(cin, rawInput);
+            vector<string> inputTokens = calculator.tokenizeInput(rawInput);
+            vector<string> postfixResult;
+
+            // Conversion Logic handling
+            if (subChoice == "1") {
+                postfixResult = calculator.convertInfixToPostfix(inputTokens);
+                cout << "Postfix: "; displayTokenVector(postfixResult);
+                cout << "Prefix:  "; displayTokenVector(calculator.convertInfixToPrefix(inputTokens));
+            } else if (subChoice == "2") {
+                postfixResult = calculator.convertPrefixToPostfix(inputTokens);
+                cout << "Infix:   " << calculator.convertPrefixToInfix(inputTokens) << endl;
+                cout << "Postfix: "; displayTokenVector(postfixResult);
+            } else if (subChoice == "3") {
+                postfixResult = inputTokens;
+                cout << "Infix:   " << calculator.convertPostfixToInfix(inputTokens) << endl;
+                cout << "Prefix:  "; displayTokenVector(calculator.convertPostfixToPrefix(inputTokens));
+            }
+            
+            // Allow user to immediately solve the expression if conversion was successful
+            if (!postfixResult.empty() && postfixResult[0].find("ERROR") == string::npos) {
+                cout << "Do you also want to evaluate this? (y/n): ";
+                string ask; getline(cin, ask);
+                if (ask == "y" || ask == "Y") cout << "Answer: " << calculator.evaluatePostfixExpression(postfixResult) << endl;
+            }
+        } else if (userChoice == "2") {
+            cout << "Enter Expression: ";
+            string rawInput; getline(cin, rawInput);
+            vector<string> inputTokens = calculator.tokenizeInput(rawInput);
+            cout << "Input Type (1: Infix, 2: Prefix, 3: Postfix): ";
+            string type; getline(cin, type);
+            
+            if (type == "1") cout << "Answer: " << calculator.evaluatePostfixExpression(calculator.convertInfixToPostfix(inputTokens)) << endl;
+            else if (type == "2") cout << "Answer: " << calculator.evaluatePostfixExpression(calculator.convertPrefixToPostfix(inputTokens)) << endl;
+            else if (type == "3") cout << "Answer: " << calculator.evaluatePostfixExpression(inputTokens) << endl;
+        }
+    }
+    return 0;
+}
